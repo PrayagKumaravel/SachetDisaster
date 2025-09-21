@@ -289,6 +289,12 @@ const icons = {
     thumbDown: (props) => (
         <svg {...props} xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v1.91l.01.01L1 14c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg>
     ),
+    sms: (props) => (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="currentColor"><path d="M0 0h24v24H0V0z" fill="none"/><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-3 11H7V9h10v4zm-4-3H7V6h6v2z"/></svg>
+    ),
+    share: (props) => (
+        <svg {...props} xmlns="http://www.w3.org/2000/svg" height="18px" viewBox="0 0 24 24" width="18px" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/></svg>
+    ),
 };
 
 // --- STYLES ---
@@ -399,6 +405,24 @@ const GlobalStyles = () => {
         }
         .highlight-new {
             animation: highlight 2s ease-out;
+        }
+        @keyframes slide-in {
+            from { transform: translateY(100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .toast-notification {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: #323232;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            box-shadow: var(--shadow-2);
+            z-index: 3000;
+            font-size: 14px;
+            animation: slide-in 0.5s ease-out forwards;
         }
     `;
     return <style>{css}</style>;
@@ -554,6 +578,7 @@ const Sidebar = ({ isOpen, activeView, onNavigate }) => {
                     <NavLink view="Dashboard" icon={<icons.map />} label="Dashboard" />
                     <NavLink view="Alerts" icon={<icons.alert />} label="Alerts" />
                     <NavLink view="PlanGenerator" icon={<icons.shield />} label="Plan Generator" />
+                    <NavLink view="Notifications" icon={<icons.sms />} label="Notifications" />
                 </ul>
             </nav>
         </div>
@@ -575,6 +600,7 @@ const AlertsPanel = ({
     newReportId,
     onVote,
     userVotes,
+    onShareAlert
 }) => {
     const [searchQuery, setSearchQuery] = useState('');
 
@@ -615,8 +641,9 @@ const AlertsPanel = ({
             cursor: 'pointer',
             transition: 'background-color 0.2s, border-left 0.2s',
             borderLeft: '5px solid transparent',
-        },
-        cardTitle: { fontWeight: 500, marginBottom: '4px' },
+            position: 'relative',
+        } as React.CSSProperties,
+        cardTitle: { fontWeight: 500, marginBottom: '4px', paddingRight: '30px' },
         cardLocation: { fontSize: '14px', color: 'var(--on-surface-variant-color)' },
         cardTimeframe: { fontSize: '12px', color: 'var(--on-surface-color)', fontStyle: 'italic', marginTop: '4px' },
         cardDescription: { fontSize: '14px', color: 'var(--on-surface-color)', marginTop: '4px', whiteSpace: 'pre-wrap' as 'pre-wrap' },
@@ -687,7 +714,17 @@ const AlertsPanel = ({
         voteButtonActive: {
             color: 'var(--google-blue)',
             fontWeight: 'bold',
-        }
+        },
+        share_button: {
+            position: 'absolute',
+            top: '8px',
+            right: '8px',
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            color: 'var(--on-surface-variant-color)',
+            padding: '4px',
+        } as React.CSSProperties,
     };
 
     const getCardStyle = (severity) => ({
@@ -697,6 +734,8 @@ const AlertsPanel = ({
 
     const AlertCard = ({ alert }) => {
         const isSelected = selectedAlert && selectedAlert.id === alert.id;
+        const canShare = 'share' in navigator;
+
         return (
             <div style={getCardStyle(alert.severity)} onClick={() => onAlertClick(alert)}
                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--background-color)'}
@@ -704,6 +743,11 @@ const AlertsPanel = ({
                 <div style={styles.cardTitle}>{alert.type}</div>
                 <div style={styles.cardLocation}>{alert.location}</div>
                 {alert.timeframe && <div style={styles.cardTimeframe}>{alert.timeframe}</div>}
+                {canShare && (
+                    <button style={styles.share_button} onClick={(e) => { e.stopPropagation(); onShareAlert(alert); }} aria-label="Share alert">
+                        <icons.share />
+                    </button>
+                )}
                 {isSelected && isRouteLoading && (
                     <div style={{display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px', fontSize: '12px', color: 'var(--on-surface-variant-color)'}}>
                         <div className="spinner-small"></div>
@@ -1509,12 +1553,92 @@ const ReportIncidentModal = ({ isOpen, onClose, onSubmit, isVerifying, isOnline 
     );
 };
 
+const NotificationsModal = ({ isOpen, onClose, onSave, onUnsubscribe, currentNumber }) => {
+    const [number, setNumber] = useState('');
+
+    useEffect(() => {
+        if (isOpen) {
+            setNumber(currentNumber);
+        }
+    }, [isOpen, currentNumber]);
+
+    const handleSave = () => {
+        // Basic validation for a phone number format
+        if (/^\+?[1-9]\d{1,14}$/.test(number)) {
+            onSave(number);
+            onClose();
+        } else {
+            alert("Please enter a valid phone number with country code (e.g., +12223334444).");
+        }
+    };
+
+    const handleUnsubscribe = () => {
+        onUnsubscribe();
+        onClose();
+    };
+
+    if (!isOpen) return null;
+
+    const styles = {
+        overlay: {
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex',
+            alignItems: 'center', justifyContent: 'center', zIndex: 1100,
+        } as React.CSSProperties,
+        modal: {
+            backgroundColor: 'var(--surface-color)', padding: '24px', borderRadius: '12px',
+            width: '90%', maxWidth: '400px', display: 'flex',
+            flexDirection: 'column', boxShadow: 'var(--shadow-2)',
+        } as React.CSSProperties,
+        header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' },
+        title: { fontSize: '20px', fontWeight: 500 },
+        closeButton: { background: 'none', border: 'none', cursor: 'pointer', fontSize: '24px', color: 'var(--on-surface-variant-color)' },
+        content: { display: 'flex', flexDirection: 'column', gap: '16px' } as React.CSSProperties,
+        label: { fontWeight: 500, fontSize: '14px' },
+        input: { padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)', fontSize: '16px' },
+        button: { padding: '12px', border: 'none', borderRadius: '8px', backgroundColor: 'var(--google-blue)', color: 'white', fontSize: '16px', cursor: 'pointer', fontWeight: 500 },
+        secondaryButton: { backgroundColor: '#f1f3f4', color: '#202124' },
+        description: { fontSize: '14px', color: 'var(--on-surface-variant-color)', lineHeight: 1.5 },
+        buttonGroup: { display: 'flex', gap: '10px', marginTop: '10px' },
+    };
+
+    return (
+        <div style={styles.overlay} onClick={onClose}>
+            <div style={styles.modal} onClick={e => e.stopPropagation()}>
+                <div style={styles.header}>
+                    <h2 style={styles.title}>Manage Notifications</h2>
+                    <button onClick={onClose} style={styles.closeButton} aria-label="Close modal"><icons.close /></button>
+                </div>
+                <div style={styles.content}>
+                    <p style={styles.description}>Get simulated SMS alerts for new, critical disasters in your area. This is a demo and does not send real SMS messages.</p>
+                    <div>
+                        <label htmlFor="phoneNumber" style={styles.label}>Phone Number</label>
+                        <input id="phoneNumber" type="tel" value={number} onChange={e => setNumber(e.target.value)} style={styles.input} placeholder="+12223334444" />
+                    </div>
+                    <div style={styles.buttonGroup}>
+                        {currentNumber && <button onClick={handleUnsubscribe} style={{ ...styles.button, ...styles.secondaryButton }}>Unsubscribe</button>}
+                        <button onClick={handleSave} style={{...styles.button, flexGrow: 1}}>Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+
+const Toast = ({ message }) => {
+    if (!message) return null;
+    return <div className="toast-notification">{message}</div>;
+};
+
+
 const App = () => {
     const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 768);
     const [isAlertsPanelOpen, setIsAlertsPanelOpen] = useState(window.innerWidth > 768);
     const [selectedAlert, setSelectedAlert] = useState(null);
     const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
     const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+    const [isNotificationsModalOpen, setIsNotificationsModalOpen] = useState(false);
     
     // Real-time data states
     const [coords, setCoords] = useState<{lat: number; lng: number} | null>(null);
@@ -1533,6 +1657,8 @@ const App = () => {
 
     // Audible alerts states
     const [isAudibleAlertsEnabled, setIsAudibleAlertsEnabled] = useState(() => localStorage.getItem('audibleAlertsEnabled') === 'true');
+    const [smsNumber, setSmsNumber] = useState(() => localStorage.getItem('smsNumber') || '');
+    const [toastMessage, setToastMessage] = useState('');
     const announcedAlertIdsRef = useRef(new Set());
     const newReportTimeoutRef = useRef(null);
 
@@ -1545,10 +1671,19 @@ const App = () => {
 
     const activeView = isAlertsPanelOpen ? 'Alerts' : 'Dashboard';
     
+    const showToast = (message, duration = 4000) => {
+        setToastMessage(message);
+        setTimeout(() => setToastMessage(''), duration);
+    };
+
     useEffect(() => {
         localStorage.setItem('audibleAlertsEnabled', String(isAudibleAlertsEnabled));
     }, [isAudibleAlertsEnabled]);
     
+    useEffect(() => {
+        localStorage.setItem('smsNumber', smsNumber);
+    }, [smsNumber]);
+
     useEffect(() => {
         localStorage.setItem('userVotes', JSON.stringify(userVotes));
     }, [userVotes]);
@@ -1562,20 +1697,25 @@ const App = () => {
     }, [queuedReports]);
     
     useEffect(() => {
-        if (isAudibleAlertsEnabled && liveAlerts.length > 0) {
+        if (liveAlerts.length > 0) {
             const newCriticalAlerts = liveAlerts.filter(
                 alert => alert.severity === 'Critical' && !announcedAlertIdsRef.current.has(alert.id)
             );
 
             if (newCriticalAlerts.length > 0) {
                 newCriticalAlerts.forEach(alert => {
-                    const utterance = new SpeechSynthesisUtterance(`Attention. Critical Alert: ${alert.type} near ${alert.location}.`);
-                    speechSynthesis.speak(utterance);
+                    if (isAudibleAlertsEnabled) {
+                        const utterance = new SpeechSynthesisUtterance(`Attention. Critical Alert: ${alert.type} near ${alert.location}.`);
+                        speechSynthesis.speak(utterance);
+                    }
+                    if (smsNumber) {
+                        showToast(`Simulated SMS to ${smsNumber}: Critical Alert - ${alert.type}`);
+                    }
                     announcedAlertIdsRef.current.add(alert.id);
                 });
             }
         }
-    }, [liveAlerts, isAudibleAlertsEnabled]);
+    }, [liveAlerts, isAudibleAlertsEnabled, smsNumber]);
 
 
     const loadAllData = async (lat, lng) => {
@@ -1787,6 +1927,8 @@ const App = () => {
     const handleNavigate = (view) => {
         if (view === 'PlanGenerator') {
             setIsPlanModalOpen(true);
+        } else if (view === 'Notifications') {
+            setIsNotificationsModalOpen(true);
         } else if (view === 'Alerts') {
             setIsAlertsPanelOpen(!isAlertsPanelOpen);
         } else if (view === 'Dashboard') {
@@ -1911,6 +2053,37 @@ const App = () => {
         setUserVotes(newUserVoteState);
     };
 
+    const handleShareAlert = async (alert) => {
+        if (!navigator.share) {
+            alert("Sharing is not supported on this browser.");
+            return;
+        }
+        try {
+            const shareData = {
+                title: 'Sachet Disaster Alert',
+                text: `Sachet Alert: ${alert.type} in ${alert.location}. Severity: ${alert.severity}. Stay safe!`,
+                // The Web Share API throws an error for non-http(s) URLs (e.g., file://).
+                // Conditionally include the URL only if the protocol is valid for sharing.
+                ...(window.location.protocol.startsWith('http') && { url: window.location.href }),
+            };
+
+            await navigator.share(shareData);
+        } catch (error) {
+            // Log the error to the console. Avoid using alert() as it can be intrusive,
+            // especially since cancelling the share dialog can also trigger an error.
+            console.error('Error sharing:', error);
+        }
+    };
+    
+    const handleSaveSmsNumber = (number) => {
+        setSmsNumber(number);
+        showToast(`SMS notifications enabled for ${number}`);
+    };
+    
+    const handleUnsubscribeSms = () => {
+        setSmsNumber('');
+        showToast('SMS notifications disabled.');
+    };
 
     const styles = {
         main: {
@@ -1974,10 +2147,19 @@ const App = () => {
                     newReportId={newReportId}
                     onVote={handleVote}
                     userVotes={userVotes}
+                    onShareAlert={handleShareAlert}
                 />}
             </main>
             <PlanGeneratorModal isOpen={isPlanModalOpen} onClose={() => setIsPlanModalOpen(false)} locationName={locationName}/>
             <ReportIncidentModal isOpen={isReportModalOpen} onClose={() => setIsReportModalOpen(false)} onSubmit={handleAddReport} isVerifying={isVerifyingReport} isOnline={isOnline} />
+            <NotificationsModal 
+                isOpen={isNotificationsModalOpen} 
+                onClose={() => setIsNotificationsModalOpen(false)} 
+                onSave={handleSaveSmsNumber}
+                onUnsubscribe={handleUnsubscribeSms}
+                currentNumber={smsNumber}
+            />
+            <Toast message={toastMessage} />
         </>
     );
 };
