@@ -182,19 +182,45 @@ const verifyAIIncidentReport = async (report, coords, activeAlerts) => {
         ? `For context, these alerts are active in the area: ${activeAlerts.map(a => a.type).join(', ')}.`
         : 'There are no active disaster alerts.';
     
-    const prompt = `Act as an incident verification system for a disaster response app. A user at latitude ${coords.lat}, longitude ${coords.lng} has reported a "${report.type}" with the description: "${report.description}".
+    const promptText = `Act as an incident verification system for a disaster response app. A user at latitude ${coords.lat}, longitude ${coords.lng} has submitted a report.
+
+Report Details:
+- Type: "${report.type}"
+- Description: "${report.description}"
+
+${report.photoBase64 ? 'An image has been attached to this report for visual analysis.' : ''}
+
+Contextual Information:
+${alertContext}
+
+Based on all available information (report details, attached image if present, and active alerts), assess if this report is plausible.
+- Visually confirm the incident from the image if possible.
+- A "Flooding" report is plausible during a "Severe Thunderstorm Warning". A "Fallen Tree" is plausible after high winds. A "Power Outage" could be related to many alerts.
+- If the description or image suggests a different incident type, correct it.
+
+Your response must be a JSON object with the following schema, and no markdown formatting:
+{
+  "is_verified": boolean, // true if the report is plausible, false otherwise
+  "reason": string, // a brief justification for your decision. If not verified, explain why. If verified, explain what makes it plausible.
+  "corrected_type": string // The original report type, or a more accurate one based on the description.
+}
+`;
     
-    ${alertContext}
-    
-    Based on this information, assess if this report is plausible. For example, a "Flooding" report is plausible during a "Severe Thunderstorm Warning". A "Fallen Tree" is plausible after high winds. A "Power Outage" could be related to many alerts. If the description suggests a different incident type, correct it.
-    
-    Your response must be a JSON object with the following schema, and no markdown formatting:
-    {
-      "is_verified": boolean, // true if the report is plausible, false otherwise
-      "reason": string, // a brief justification for your decision. If not verified, explain why. If verified, explain what makes it plausible.
-      "corrected_type": string // The original report type, or a more accurate one based on the description.
+    const requestParts: any[] = [{ text: promptText }];
+
+    if (report.photoBase64) {
+        const matches = report.photoBase64.match(/^data:(.+);base64,(.+)$/);
+        if (matches) {
+            const mimeType = matches[1];
+            const data = matches[2];
+            requestParts.push({
+                inlineData: {
+                    mimeType,
+                    data,
+                },
+            });
+        }
     }
-    `;
 
     const responseSchema = {
         type: Type.OBJECT,
@@ -209,7 +235,7 @@ const verifyAIIncidentReport = async (report, coords, activeAlerts) => {
     try {
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
-            contents: prompt,
+            contents: { parts: requestParts },
             config: {
                 responseMimeType: "application/json",
                 responseSchema: responseSchema,
@@ -218,7 +244,7 @@ const verifyAIIncidentReport = async (report, coords, activeAlerts) => {
         return JSON.parse(response.text);
     } catch (e) {
         console.error("AI Incident Verification Error:", e);
-        return { is_verified: false, reason: "Could not verify the report due to a technical error.", corrected_type: report.type };
+        throw e; // Throw error to be caught by the queuing mechanism
     }
 };
 
@@ -539,6 +565,7 @@ const AlertsPanel = ({
     predictedAlerts,
     resources,
     userReports,
+    queuedReports,
     isLoading,
     error,
     onAlertClick,
@@ -696,31 +723,40 @@ const AlertsPanel = ({
         </div>
     );
     
-    const UserReportCard = ({ report, userVote, onVoteClick }) => (
-        <div style={getCardStyle('Community')} className={report.id === newReportId ? 'highlight-new' : ''}>
-           <div onClick={() => onAlertClick(report)}>
-                <div style={{ ...styles.cardTitle, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                   <span>{report.type}</span>
-                   {report.isVerified && <span style={{fontSize: '10px', fontWeight: 'bold', color: 'var(--google-green)', backgroundColor: 'rgba(15, 157, 88, 0.1)', padding: '2px 6px', borderRadius: '4px'}}>VERIFIED</span>}
+    const UserReportCard = ({ report, userVote, onVoteClick }) => {
+        const isQueued = report.status === 'queued';
+        const cardSeverity = isQueued ? 'Low' : 'Community';
+        return (
+            <div style={{ ...getCardStyle(cardSeverity), opacity: isQueued ? 0.7 : 1 }} className={report.id === newReportId ? 'highlight-new' : ''}>
+               <div onClick={() => onAlertClick(report)}>
+                    <div style={{ ...styles.cardTitle, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                       <span>{report.type}</span>
+                       {report.isVerified && <span style={{fontSize: '10px', fontWeight: 'bold', color: 'var(--google-green)', backgroundColor: 'rgba(15, 157, 88, 0.1)', padding: '2px 6px', borderRadius: '4px'}}>VERIFIED</span>}
+                       {isQueued && <span style={{fontSize: '10px', fontWeight: 'bold', color: 'var(--on-surface-variant-color)', backgroundColor: '#f1f3f4', padding: '2px 6px', borderRadius: '4px'}}>PENDING SYNC</span>}
+                   </div>
+                   <div style={styles.cardLocation}>{report.location}</div>
+                   {report.description && <p style={styles.cardDescription}>{report.description}</p>}
+                   {report.photo && <img src={report.photo} alt={report.type} style={{width: '100%', borderRadius: '4px', marginTop: '8px'}} />}
+                   {report.verificationReason && <p style={{...styles.cardDescription, fontStyle: 'italic', fontSize: '12px', color: 'var(--on-surface-variant-color)', marginTop: '8px', borderLeft: '2px solid var(--border-color)', paddingLeft: '8px'}}>{report.verificationReason}</p>}
                </div>
-               <div style={styles.cardLocation}>{report.location}</div>
-               {report.description && <p style={styles.cardDescription}>{report.description}</p>}
-               {report.verificationReason && <p style={{...styles.cardDescription, fontStyle: 'italic', fontSize: '12px', color: 'var(--on-surface-variant-color)', marginTop: '8px', borderLeft: '2px solid var(--border-color)', paddingLeft: '8px'}}>{report.verificationReason}</p>}
+               {!isQueued && (
+                 <div style={styles.voteSection}>
+                     <button onClick={() => onVoteClick(report.id, 'up')} style={{...styles.voteButton, ...(userVote === 'up' && styles.voteButtonActive)}} aria-label="Upvote report">
+                         <icons.thumbUp height="18px" width="18px" />
+                         <span>{report.upvotes}</span>
+                     </button>
+                     <button onClick={() => onVoteClick(report.id, 'down')} style={{...styles.voteButton, ...(userVote === 'down' && styles.voteButtonActive)}} aria-label="Downvote report">
+                         <icons.thumbDown height="18px" width="18px" />
+                         <span>{report.downvotes}</span>
+                     </button>
+                 </div>
+               )}
            </div>
-           <div style={styles.voteSection}>
-               <button onClick={() => onVoteClick(report.id, 'up')} style={{...styles.voteButton, ...(userVote === 'up' && styles.voteButtonActive)}} aria-label="Upvote report">
-                   <icons.thumbUp height="18px" width="18px" />
-                   <span>{report.upvotes}</span>
-               </button>
-               <button onClick={() => onVoteClick(report.id, 'down')} style={{...styles.voteButton, ...(userVote === 'down' && styles.voteButtonActive)}} aria-label="Downvote report">
-                   <icons.thumbDown height="18px" width="18px" />
-                   <span>{report.downvotes}</span>
-               </button>
-           </div>
-       </div>
-    );
+        );
+    };
     
     const sortedUserReports = [...userReports].sort((a, b) => (b.upvotes - b.downvotes) - (a.upvotes - a.downvotes));
+    const allCommunityReports = [...queuedReports, ...sortedUserReports];
 
     const filteredResources = resources.filter(resource =>
         resource.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -738,7 +774,7 @@ const AlertsPanel = ({
         
         return (
             <>
-                {!hasAlerts && userReports.length === 0 &&(
+                {!hasAlerts && allCommunityReports.length === 0 &&(
                     <div style={styles.centeredStatus}>
                         <icons.checkShield style={{color: 'var(--google-green)', marginBottom: '16px'}}/>
                         <p>No active alerts in your area. Stay safe!</p>
@@ -758,10 +794,10 @@ const AlertsPanel = ({
                     </>
                 )}
                 
-                {userReports.length > 0 && (
+                {allCommunityReports.length > 0 && (
                     <>
                         <div style={styles.subHeader}>Community Reports</div>
-                        {sortedUserReports.map(report => 
+                        {allCommunityReports.map(report => 
                             <UserReportCard 
                                 key={report.id} 
                                 report={report} 
@@ -805,7 +841,7 @@ const AlertsPanel = ({
     );
 };
 
-const MapComponent = ({ coords, alerts, predictedAlerts, resources, userReports, selectedAlert, evacuationRoute, onReportIncidentClick, newReportId }) => {
+const MapComponent = ({ coords, alerts, predictedAlerts, resources, userReports, queuedReports, selectedAlert, evacuationRoute, onReportIncidentClick, newReportId }) => {
     const mapRef = useRef(null);
     const alertLayerRef = useRef(null);
     const resourceLayerRef = useRef(null);
@@ -884,16 +920,19 @@ const MapComponent = ({ coords, alerts, predictedAlerts, resources, userReports,
      useEffect(() => {
         if (userReportsLayerRef.current) {
             userReportsLayerRef.current.clearLayers();
-             userReports.forEach(report => {
+            const allReports = [...userReports, ...queuedReports];
+             allReports.forEach(report => {
                 const isNew = report.id === newReportId;
-                const iconHtml = `<div class="map-icon ${isNew ? 'new-report-marker' : ''}" style="width: 24px; height: 24px; background-color: var(--google-yellow); color: #333">👤</div>`;
+                const isQueued = report.status === 'queued';
+                const iconColor = isQueued ? 'grey' : 'var(--google-yellow)';
+                const iconHtml = `<div class="map-icon ${isNew ? 'new-report-marker' : ''}" style="width: 24px; height: 24px; background-color: ${iconColor}; color: #333">👤</div>`;
                 const customIcon = L.divIcon({ html: iconHtml, className: '' });
-                const popupContent = `<b>${report.type} (Community Report)</b><br>${report.description || ''}${report.isVerified ? `<br><br><i style="color:var(--google-green)">Verified: ${report.verificationReason}</i>` : ''}`;
+                const popupContent = `<b>${report.type} (Community Report)</b>${isQueued ? '<br><i>Status: Pending Sync</i>' : ''}<br>${report.description || ''}${report.photo ? `<br><img src="${report.photo}" alt="Incident" style="width:100%; max-width:200px; margin-top:8px; border-radius:4px;">` : ''}${report.isVerified ? `<br><br><i style="color:var(--google-green)">Verified: ${report.verificationReason}</i>` : ''}`;
                 L.marker([report.lat, report.lng], { icon: customIcon, zIndexOffset: 500 }).addTo(userReportsLayerRef.current)
                     .bindPopup(popupContent);
             });
         }
-    }, [userReports, newReportId]);
+    }, [userReports, queuedReports, newReportId]);
 
     useEffect(() => {
         if (mapRef.current && routeLayerRef.current) {
@@ -1335,31 +1374,56 @@ const WeatherWidget = ({ weatherData, isLoading }) => {
     );
 };
 
-const ReportIncidentModal = ({ isOpen, onClose, onSubmit, isVerifying }) => {
+const ReportIncidentModal = ({ isOpen, onClose, onSubmit, isVerifying, isOnline }) => {
     const [incidentType, setIncidentType] = useState('Flooding');
+    const [otherType, setOtherType] = useState('');
     const [description, setDescription] = useState('');
-    
+    const [photoPreview, setPhotoPreview] = useState(null);
+
+    const resetForm = () => {
+        setIncidentType('Flooding');
+        setOtherType('');
+        setDescription('');
+        setPhotoPreview(null);
+    };
+
     const handleClose = () => {
-        if (description && !window.confirm("Are you sure you want to close? Your report description will be lost.")) {
+        if ((description || otherType || photoPreview) && !window.confirm("Are you sure you want to close? Your report will be lost.")) {
             return;
         }
-        setIncidentType('Flooding');
-        setDescription('');
+        resetForm();
         onClose();
+    };
+
+    const handlePhotoChange = (e) => {
+        const file = e.target.files[0];
+        if (file && file.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                setPhotoPreview(reader.result as string);
+            };
+            reader.readAsDataURL(file);
+        } else {
+            setPhotoPreview(null);
+        }
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        const success = await onSubmit({ type: incidentType, description });
+        const finalType = incidentType === 'Other' ? otherType.trim() : incidentType;
+        if (!finalType) {
+            alert("Please specify an incident type.");
+            return;
+        }
+        const success = await onSubmit({ type: finalType, description, photoBase64: photoPreview });
         if (success) {
-            setIncidentType('Flooding');
-            setDescription('');
+            resetForm();
             onClose();
         }
     };
-    
+
     if (!isOpen) return null;
-    
+
     const styles = {
         overlay: {
             position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -1376,8 +1440,24 @@ const ReportIncidentModal = ({ isOpen, onClose, onSubmit, isVerifying }) => {
         closeButton: { background: 'none', border: 'none', cursor: 'pointer', fontSize: '24px', color: 'var(--on-surface-variant-color)' },
         form: { display: 'flex', flexDirection: 'column', gap: '16px' } as React.CSSProperties,
         label: { fontWeight: 500, fontSize: '14px' },
-        input: { padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)', fontSize: '16px', resize: 'vertical' as 'vertical' },
+        input: { padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)', fontSize: '16px', resize: 'vertical' as 'vertical', width: '100%', boxSizing: 'border-box' as 'border-box' },
         button: { padding: '12px', border: 'none', borderRadius: '8px', backgroundColor: 'var(--google-blue)', color: 'white', fontSize: '16px', cursor: 'pointer', fontWeight: 500, opacity: isVerifying ? 0.7 : 1, },
+        photoInputButton: {
+            backgroundColor: '#f1f3f4',
+            color: '#202124',
+            textAlign: 'center',
+            display: 'block',
+            cursor: 'pointer',
+            padding: '10px',
+            borderRadius: '4px',
+            border: '1px solid var(--border-color)',
+        } as React.CSSProperties,
+    };
+
+    const submitButtonText = () => {
+        if (isVerifying) return 'Verifying...';
+        if (!isOnline) return 'Queue Report';
+        return 'Submit Report';
     };
 
     return (
@@ -1398,12 +1478,30 @@ const ReportIncidentModal = ({ isOpen, onClose, onSubmit, isVerifying }) => {
                             <option>Other</option>
                         </select>
                     </div>
-                     <div>
+                    {incidentType === 'Other' && (
+                         <div>
+                            <label htmlFor="otherType" style={styles.label}>Specify Incident Type</label>
+                            <input id="otherType" type="text" value={otherType} onChange={e => setOtherType(e.target.value)} style={styles.input} placeholder="e.g., Gas Leak" disabled={isVerifying} required />
+                        </div>
+                    )}
+                    <div>
                         <label htmlFor="description" style={styles.label}>Description (optional)</label>
                         <textarea id="description" value={description} onChange={e => setDescription(e.target.value)} style={styles.input} rows={3} placeholder="e.g., Main street is blocked by a large banyan tree." disabled={isVerifying} />
                     </div>
+                    <div>
+                        <label style={{...styles.label, display: 'block', marginBottom: '8px'}}>Add Photo (optional)</label>
+                        <input type="file" id="photoUpload" accept="image/*" onChange={handlePhotoChange} style={{ display: 'none' }} disabled={isVerifying} />
+                        <label htmlFor="photoUpload" style={styles.photoInputButton}>
+                            Choose File
+                        </label>
+                        {photoPreview && (
+                            <div style={{marginTop: '16px', textAlign: 'center'}}>
+                                <img src={photoPreview} alt="Incident preview" style={{maxWidth: '100%', maxHeight: '150px', borderRadius: '8px'}} />
+                            </div>
+                        )}
+                    </div>
                     <button type="submit" style={styles.button} disabled={isVerifying}>
-                        {isVerifying ? 'Verifying...' : 'Submit Report'}
+                        {submitButtonText()}
                     </button>
                 </form>
             </div>
@@ -1425,6 +1523,7 @@ const App = () => {
     const [predictedAlerts, setPredictedAlerts] = useState([]);
     const [resources, setResources] = useState([]);
     const [userReports, setUserReports] = useState(() => JSON.parse(localStorage.getItem('userReports')) || []);
+    const [queuedReports, setQueuedReports] = useState(() => JSON.parse(localStorage.getItem('queuedReports')) || []);
     const [weatherData, setWeatherData] = useState(null);
     const [evacuationRoute, setEvacuationRoute] = useState(null);
     const [newReportId, setNewReportId] = useState(null);
@@ -1457,6 +1556,10 @@ const App = () => {
     useEffect(() => {
         localStorage.setItem('userReports', JSON.stringify(userReports));
     }, [userReports]);
+
+    useEffect(() => {
+        localStorage.setItem('queuedReports', JSON.stringify(queuedReports));
+    }, [queuedReports]);
     
     useEffect(() => {
         if (isAudibleAlertsEnabled && liveAlerts.length > 0) {
@@ -1601,6 +1704,61 @@ const App = () => {
         };
     }, []);
 
+    // Effect to process the report queue when coming online
+    useEffect(() => {
+        const processQueue = async () => {
+            if (isOnline && queuedReports.length > 0 && coords) {
+                console.log(`Online status detected. Processing ${queuedReports.length} queued reports.`);
+                alert(`Back online! Syncing ${queuedReports.length} queued report(s).`);
+                
+                const reportsToProcess = [...queuedReports];
+                const successfullyProcessedIds = [];
+                const newVerifiedReports = [];
+
+                for (const report of reportsToProcess) {
+                    try {
+                        const verificationResult = await verifyAIIncidentReport(report, coords, liveAlerts);
+                        if (verificationResult.is_verified) {
+                            newVerifiedReports.push({
+                                id: `user-${Date.now()}-${Math.random()}`,
+                                lat: report.lat,
+                                lng: report.lng,
+                                location: report.location,
+                                description: report.description,
+                                type: verificationResult.corrected_type,
+                                photo: report.photoBase64,
+                                isVerified: true,
+                                verificationReason: verificationResult.reason,
+                                upvotes: 0,
+                                downvotes: 0,
+                            });
+                        } else {
+                            console.warn(`Queued report not verified: ${verificationResult.reason}`);
+                        }
+                        successfullyProcessedIds.push(report.id);
+                    } catch (error) {
+                        console.error("Failed to verify queued report, will retry later:", error);
+                    }
+                }
+                
+                if (newVerifiedReports.length > 0) {
+                    setUserReports(prev => [...prev, ...newVerifiedReports]);
+                }
+
+                if (successfullyProcessedIds.length > 0) {
+                    setQueuedReports(prev => prev.filter(r => !successfullyProcessedIds.includes(r.id)));
+                    if (successfullyProcessedIds.length < reportsToProcess.length) {
+                        alert('Some reports could not be synced due to a network error and will be retried later.');
+                    }
+                }
+            }
+        };
+
+        const timeoutId = setTimeout(processQueue, 2000); 
+        return () => clearTimeout(timeoutId);
+    }, [isOnline, coords, liveAlerts, queuedReports]);
+
+
     const handleAlertClick = (item) => {
         setSelectedAlert(item);
         setEvacuationRoute(null);
@@ -1657,6 +1815,26 @@ const App = () => {
     
     const handleAddReport = async (reportData) => {
         if (!coords) return false;
+
+        if (!isOnline) {
+            console.log("App is offline. Queuing report.");
+            const queuedReport = {
+                id: `queued-${Date.now()}`,
+                lat: coords.lat,
+                lng: coords.lng,
+                location: `Near your current location`,
+                description: reportData.description,
+                type: reportData.type,
+                photo: reportData.photoBase64,
+                photoBase64: reportData.photoBase64, // Keep for resubmission
+                status: 'queued',
+                upvotes: 0,
+                downvotes: 0,
+            };
+            setQueuedReports(prev => [...prev, queuedReport]);
+            alert("You are offline. Your report has been queued and will be submitted when you're back online.");
+            return true;
+        }
     
         setIsVerifyingReport(true);
         
@@ -1669,12 +1847,13 @@ const App = () => {
                 }
     
                 const newReport = {
-                    ...reportData,
                     id: `user-${Date.now()}`,
                     lat: coords.lat,
                     lng: coords.lng,
                     location: `Near your current location`,
+                    description: reportData.description,
                     type: verificationResult.corrected_type,
+                    photo: reportData.photoBase64,
                     isVerified: true,
                     verificationReason: verificationResult.reason,
                     upvotes: 0,
@@ -1772,6 +1951,7 @@ const App = () => {
                         predictedAlerts={predictedAlerts}
                         resources={resources}
                         userReports={userReports}
+                        queuedReports={queuedReports}
                         selectedAlert={selectedAlert} 
                         evacuationRoute={evacuationRoute}
                         onReportIncidentClick={() => setIsReportModalOpen(true)}
@@ -1784,6 +1964,7 @@ const App = () => {
                     predictedAlerts={predictedAlerts}
                     resources={resources}
                     userReports={userReports}
+                    queuedReports={queuedReports}
                     isLoading={appState === 'loading' || appState === 'initializing'}
                     error={appState === 'error' ? appError : null}
                     onAlertClick={handleAlertClick}
@@ -1796,7 +1977,7 @@ const App = () => {
                 />}
             </main>
             <PlanGeneratorModal isOpen={isPlanModalOpen} onClose={() => setIsPlanModalOpen(false)} locationName={locationName}/>
-            <ReportIncidentModal isOpen={isReportModalOpen} onClose={() => setIsReportModalOpen(false)} onSubmit={handleAddReport} isVerifying={isVerifyingReport} />
+            <ReportIncidentModal isOpen={isReportModalOpen} onClose={() => setIsReportModalOpen(false)} onSubmit={handleAddReport} isVerifying={isVerifyingReport} isOnline={isOnline} />
         </>
     );
 };
